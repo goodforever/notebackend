@@ -23,8 +23,9 @@ github.com/go-rel/postgres v0.6.0/go.mod h1:YfXUvLWRcMUlV5cANNeYV4sx214MzVXBr+Sk
 github.com/go-rel/primaryreplica v0.1.0 h1:ARt8QHa55Tmz7hJYtGunz4B3THQiFDOJb0yZBgnrzx4=
 github.com/go-rel/primaryreplica v0.1.0/go.mod h1:j/b9RmL4gdnuQMh4UPBeE1h6RpQCtiUIC9QHIvgjIs8=
 github.com/go-rel/rel v0.28.0/go.mod h1:zaIYPmM3AfJrh0xBmm7KoVKRgTNvr0cgZfcJ88gVA2U=
-github.com/go-rel/rel v0.30.0 h1:cROr0KQx1WJCx+LGEs885yxt2UsO54vOQcgsXoeGTPk=
 github.com/go-rel/rel v0.30.0/go.mod h1:Wu6HB6x0oIiEOdUJClwmn7ByCmdL73U5gItAYObyyuo=
+github.com/go-rel/rel v0.34.0 h1:dynBkxkVOHxFMHtu3p8vdvAMjjCm+Yi2J0tJsjeoVjQ=
+github.com/go-rel/rel v0.34.0/go.mod h1:YDHtnJhlaiSjANLGiZXvI57jg1amfpJSJlOimq6WJTE=
 github.com/go-rel/reltest v0.4.0/go.mod h1:3udgrKCZGCMFWc8k+RH975gUdUFPE/yspG2iWN9gjqU=
 github.com/go-rel/reltest v0.5.0 h1:ReQzqu538lK9HU8/RKv3Z5e2WnycsAJlVL2ippDckQU=
 github.com/go-rel/reltest v0.5.0/go.mod h1:onixPXWMVL+KILH7OdUufKDm1KN0H6FzXOP7OoNC9qM=
@@ -156,8 +157,9 @@ github.com/stretchr/testify v1.2.2/go.mod h1:a8OnRcib4nhh0OaRAV+Yts87kKdq0PP7pXf
 github.com/stretchr/testify v1.3.0/go.mod h1:M5WIy9Dh21IEIfnGCwXGc5bZfKNJtfHm1UVUgZn+9EI=
 github.com/stretchr/testify v1.4.0/go.mod h1:j7eGeouHqKxXV5pUuKE4zz7dFj8WfuZ+81PSLYec5m4=
 github.com/stretchr/testify v1.5.1/go.mod h1:5W2xD1RspED5o8YsWQXVCued0rvSQ+mT+I5cxcmMvtA=
-github.com/stretchr/testify v1.7.0 h1:nwc3DEeHmmLAfoZucVR881uASk0Mfjw8xYJ99tb5CcY=
 github.com/stretchr/testify v1.7.0/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
+github.com/stretchr/testify v1.7.1 h1:5TQK59W5E3v0r2duFAb7P95B6hEeOyEnHRa8MjYSMTY=
+github.com/stretchr/testify v1.7.1/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
 github.com/subosito/gotenv v1.2.0/go.mod h1:N0PQaV/YGNqwC0u51sEeR/aUtSLEXKX9iv69rRypqCw=
 github.com/yuin/goldmark v1.2.1/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
 github.com/yuin/goldmark v1.3.5/go.mod h1:mwnBkeHKe2W/ZEtQ+71ViKU8L12m81fl3OWwC1Zlc8k=
