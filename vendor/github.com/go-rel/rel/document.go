@@ -30,6 +30,8 @@ const (
 	HasDeletedAt
 	// HasDeleted flag.
 	HasDeleted
+	// Versioning
+	HasVersioning
 )
 
 var (
@@ -38,6 +40,7 @@ var (
 	documentDataCache sync.Map
 	rtTime            = reflect.TypeOf(time.Time{})
 	rtBool            = reflect.TypeOf(false)
+	rtInt             = reflect.TypeOf(int(0))
 	rtTable           = reflect.TypeOf((*table)(nil)).Elem()
 	rtPrimary         = reflect.TypeOf((*primary)(nil)).Elem()
 )
@@ -53,17 +56,17 @@ type primary interface {
 
 type primaryData struct {
 	field []string
-	index []int
+	index [][]int
 }
 
 type documentData struct {
-	index        map[string]int
+	index        map[string][]int
 	fields       []string
 	belongsTo    []string
 	hasOne       []string
 	hasMany      []string
 	primaryField []string
-	primaryIndex []int
+	primaryIndex [][]int
 	preload      []string
 	flag         DocumentFlag
 }
@@ -121,7 +124,7 @@ func (d Document) PrimaryValues() []interface{} {
 	)
 
 	for i := range pValues {
-		pValues[i] = d.rv.Field(d.data.primaryIndex[i]).Interface()
+		pValues[i] = reflectValueFieldByIndex(d.rv, d.data.primaryIndex[i], false).Interface()
 	}
 
 	return pValues
@@ -153,7 +156,7 @@ func (d Document) Persisted() bool {
 }
 
 // Index returns map of column name and it's struct index.
-func (d Document) Index() map[string]int {
+func (d Document) Index() map[string][]int {
 	return d.data.index
 }
 
@@ -166,7 +169,7 @@ func (d Document) Fields() []string {
 func (d Document) Type(field string) (reflect.Type, bool) {
 	if i, ok := d.data.index[field]; ok {
 		var (
-			ft = d.rt.Field(i).Type
+			ft = d.rt.FieldByIndex(i).Type
 		)
 
 		if ft.Kind() == reflect.Ptr {
@@ -184,9 +187,10 @@ func (d Document) Type(field string) (reflect.Type, bool) {
 // Value returns value of given field. if field does not exist, second returns value will be false.
 func (d Document) Value(field string) (interface{}, bool) {
 	if i, ok := d.data.index[field]; ok {
+
 		var (
 			value interface{}
-			fv    = d.rv.Field(i)
+			fv    = reflectValueFieldByIndex(d.rv, i, false)
 			ft    = fv.Type()
 		)
 
@@ -210,7 +214,7 @@ func (d Document) SetValue(field string, value interface{}) bool {
 		var (
 			rv reflect.Value
 			rt reflect.Type
-			fv = d.rv.Field(i)
+			fv = reflectValueFieldByIndex(d.rv, i, true)
 			ft = fv.Type()
 		)
 
@@ -242,44 +246,20 @@ func (d Document) SetValue(field string, value interface{}) bool {
 	return false
 }
 
-func setPointerValue(ft reflect.Type, fv reflect.Value, rt reflect.Type, rv reflect.Value) bool {
-	if ft.Elem() != rt && !rt.AssignableTo(ft.Elem()) {
-		return false
-	}
-
-	if fv.IsNil() {
-		fv.Set(reflect.New(ft.Elem()))
-	}
-	fv.Elem().Set(rv)
-
-	return true
-}
-
-func setConvertValue(ft reflect.Type, fv reflect.Value, rt reflect.Type, rv reflect.Value) bool {
-	var (
-		rk = rt.Kind()
-		fk = ft.Kind()
-	)
-
-	// prevents unintentional conversion
-	if (rk >= reflect.Int || rk <= reflect.Uint64) && fk == reflect.String {
-		return false
-	}
-
-	fv.Set(rv.Convert(ft))
-	return true
-}
-
 // Scanners returns slice of sql.Scanner for given fields.
 func (d Document) Scanners(fields []string) []interface{} {
 	var (
-		result = make([]interface{}, len(fields))
+		result    = make([]interface{}, len(fields))
+		assocRefs map[string]struct {
+			fields  []string
+			indexes []int
+		}
 	)
 
 	for index, field := range fields {
 		if structIndex, ok := d.data.index[field]; ok {
 			var (
-				fv = d.rv.Field(structIndex)
+				fv = reflectValueFieldByIndex(d.rv, structIndex, true)
 				ft = fv.Type()
 			)
 
@@ -288,8 +268,38 @@ func (d Document) Scanners(fields []string) []interface{} {
 			} else {
 				result[index] = Nullable(fv.Addr().Interface())
 			}
+		} else if split := strings.SplitN(field, ".", 2); len(split) == 2 {
+			if assocRefs == nil {
+				assocRefs = make(map[string]struct {
+					fields  []string
+					indexes []int
+				})
+			}
+
+			refs := assocRefs[split[0]]
+			refs.fields = append(refs.fields, split[1])
+			refs.indexes = append(refs.indexes, index)
+			assocRefs[split[0]] = refs
 		} else {
 			result[index] = &sql.RawBytes{}
+		}
+	}
+
+	// get scanners from associations
+	for assocName, refs := range assocRefs {
+		if assoc, ok := d.association(assocName); ok && assoc.Type() == BelongsTo || assoc.Type() == HasOne {
+			var (
+				assocDoc, _   = assoc.Document()
+				assocScanners = assocDoc.Scanners(refs.fields)
+			)
+
+			for i, index := range refs.indexes {
+				result[index] = assocScanners[i]
+			}
+		} else {
+			for _, index := range refs.indexes {
+				result[index] = &sql.RawBytes{}
+			}
 		}
 	}
 
@@ -318,12 +328,20 @@ func (d Document) Preload() []string {
 
 // Association of this document with given name.
 func (d Document) Association(name string) Association {
-	index, ok := d.data.index[name]
-	if !ok {
-		panic("rel: no field named (" + name + ") in type " + d.rt.String() + " found ")
+	if assoc, ok := d.association(name); ok {
+		return assoc
 	}
 
-	return newAssociation(d.rv, index)
+	panic("rel: no field named (" + name + ") in type " + d.rt.String() + " found ")
+}
+
+func (d Document) association(name string) (Association, bool) {
+	index, ok := d.data.index[name]
+	if !ok {
+		return Association{}, false
+	}
+
+	return newAssociation(d.rv, index), true
 }
 
 // Reset this document, this is a noop for compatibility with collection.
@@ -354,6 +372,42 @@ func (d *Document) Len() int {
 // Flag returns true if struct contains specified flag.
 func (d Document) Flag(flag DocumentFlag) bool {
 	return d.data.flag.Is(flag)
+}
+
+// Adds a prefix to field names
+func appendWithPrefix(target, fieldNames []string, prefix string) []string {
+	if prefix == "" {
+		return append(target, fieldNames...)
+	}
+	for _, name := range fieldNames {
+		target = append(target, prefix+name)
+	}
+	return target
+}
+
+// Adds a field index and checks for conflicts
+func (d *documentData) addFieldIndex(name string, index []int) {
+	if _, ok := d.index[name]; ok {
+		panic("rel: conflicting field (" + name + ") in struct")
+	}
+	d.index[name] = index
+}
+
+// Transfer values from other document data
+func (d *documentData) mergeEmbedded(other documentData, indexPrefix int, namePrefix string) {
+	for name, path := range other.index {
+		d.addFieldIndex(namePrefix+name, append([]int{indexPrefix}, path...))
+	}
+	d.fields = appendWithPrefix(d.fields, other.fields, namePrefix)
+	d.belongsTo = appendWithPrefix(d.belongsTo, other.belongsTo, namePrefix)
+	d.hasOne = appendWithPrefix(d.hasOne, other.hasOne, namePrefix)
+	d.hasMany = appendWithPrefix(d.hasMany, other.hasMany, namePrefix)
+	d.primaryField = appendWithPrefix(d.primaryField, other.primaryField, namePrefix)
+	for index := range other.primaryIndex {
+		d.primaryIndex = append(d.primaryIndex, append([]int{indexPrefix}, index))
+	}
+	d.preload = appendWithPrefix(d.preload, other.preload, namePrefix)
+	d.flag |= other.flag
 }
 
 // NewDocument used to create abstraction to work with struct.
@@ -408,27 +462,37 @@ func extractDocumentData(rt reflect.Type, skipAssoc bool) documentData {
 
 	var (
 		data = documentData{
-			index: make(map[string]int, rt.NumField()),
+			index: make(map[string][]int, rt.NumField()),
 		}
 	)
 
 	// TODO probably better to use slice index instead.
 	for i := 0; i < rt.NumField(); i++ {
 		var (
-			sf   = rt.Field(i)
-			typ  = sf.Type
-			name = fieldName(sf)
+			sf           = rt.Field(i)
+			typ          = sf.Type
+			name, tagged = fieldName(sf)
 		)
 
 		if c := sf.Name[0]; c < 'A' || c > 'Z' || name == "" {
 			continue
 		}
 
-		data.index[name] = i
-
 		for typ.Kind() == reflect.Ptr || typ.Kind() == reflect.Interface || typ.Kind() == reflect.Slice {
 			typ = typ.Elem()
 		}
+
+		if typ.Kind() == reflect.Struct && sf.Anonymous {
+			embedded := extractDocumentData(typ, skipAssoc)
+			embeddedName := ""
+			if tagged {
+				embeddedName = name
+			}
+			data.mergeEmbedded(embedded, i, embeddedName)
+			continue
+		}
+
+		data.addFieldIndex(name, sf.Index)
 
 		if flag := extractFlag(typ, name); flag != Invalid {
 			data.fields = append(data.fields, name)
@@ -450,7 +514,7 @@ func extractDocumentData(rt reflect.Type, skipAssoc bool) documentData {
 
 		if !skipAssoc {
 			var (
-				assocData = extractAssociationData(rt, i)
+				assocData = extractAssociationData(rt, sf.Index)
 			)
 
 			switch assocData.typ {
@@ -468,7 +532,9 @@ func extractDocumentData(rt reflect.Type, skipAssoc bool) documentData {
 		}
 	}
 
-	data.primaryField, data.primaryIndex = searchPrimary(rt)
+	primaryField, primaryIndex := searchPrimary(rt)
+	data.primaryField = append(data.primaryField, primaryField...)
+	data.primaryIndex = append(data.primaryIndex, primaryIndex...)
 
 	if !skipAssoc {
 		documentDataCache.Store(rt, data)
@@ -496,6 +562,13 @@ func extractBoolFlag(name string) DocumentFlag {
 	return Invalid
 }
 
+func extractIntFlag(name string) DocumentFlag {
+	if name == "lock_version" {
+		return HasVersioning
+	}
+	return Invalid
+}
+
 func extractFlag(rt reflect.Type, name string) DocumentFlag {
 	if rt == rtTime {
 		return extractTimeFlag(name)
@@ -503,26 +576,29 @@ func extractFlag(rt reflect.Type, name string) DocumentFlag {
 	if rt == rtBool {
 		return extractBoolFlag(name)
 	}
+	if rt == rtInt {
+		return extractIntFlag(name)
+	}
 	return Invalid
 }
 
-func fieldName(sf reflect.StructField) string {
+func fieldName(sf reflect.StructField) (string, bool) {
 	if tag := sf.Tag.Get("db"); tag != "" {
 		name := strings.Split(tag, ",")[0]
 
 		if name == "-" {
-			return ""
+			return "", true
 		}
 
 		if name != "" {
-			return name
+			return name, true
 		}
 	}
 
-	return snaker.CamelToSnake(sf.Name)
+	return snaker.CamelToSnake(sf.Name), false
 }
 
-func searchPrimary(rt reflect.Type) ([]string, []int) {
+func searchPrimary(rt reflect.Type) ([]string, [][]int) {
 	if result, cached := primariesCache.Load(rt); cached {
 		p := result.(primaryData)
 		return p.field, p.index
@@ -530,7 +606,7 @@ func searchPrimary(rt reflect.Type) ([]string, []int) {
 
 	var (
 		field         []string
-		index         []int
+		index         [][]int
 		fallbackIndex = -1
 	)
 
@@ -546,8 +622,9 @@ func searchPrimary(rt reflect.Type) ([]string, []int) {
 			sf := rt.Field(i)
 
 			if tag := sf.Tag.Get("db"); strings.HasSuffix(tag, ",primary") {
-				index = append(index, i)
-				field = append(field, fieldName(sf))
+				index = append(index, sf.Index)
+				name, _ := fieldName(sf)
+				field = append(field, name)
 				continue
 			}
 
@@ -560,7 +637,7 @@ func searchPrimary(rt reflect.Type) ([]string, []int) {
 
 	if len(field) == 0 && fallbackIndex >= 0 {
 		field = []string{"id"}
-		index = []int{fallbackIndex}
+		index = [][]int{{fallbackIndex}}
 	}
 
 	primariesCache.Store(rt, primaryData{
