@@ -2,51 +2,17 @@ package rel
 
 import (
 	"reflect"
-	"sync"
-
-	"github.com/serenize/snaker"
 )
-
-// AssociationType defines the type of association in database.
-type AssociationType uint8
-
-const (
-	// BelongsTo association.
-	BelongsTo = iota
-	// HasOne association.
-	HasOne
-	// HasMany association.
-	HasMany
-)
-
-type associationKey struct {
-	rt    reflect.Type
-	index int
-}
-
-type associationData struct {
-	typ            AssociationType
-	targetIndex    []int
-	referenceField string
-	referenceIndex int
-	foreignField   string
-	foreignIndex   int
-	through        string
-	autoload       bool
-	autosave       bool
-}
-
-var associationCache sync.Map
 
 // Association provides abstraction to work with association of document or collection.
 type Association struct {
-	data associationData
+	meta AssociationMeta
 	rv   reflect.Value
 }
 
 // Type of association.
 func (a Association) Type() AssociationType {
-	return a.data.typ
+	return a.meta.Type()
 }
 
 // Document returns association target as document.
@@ -64,7 +30,7 @@ func (a Association) LazyDocument() (*Document, bool) {
 
 func (a Association) document(lazy bool) (*Document, bool) {
 	var (
-		rv = a.rv.FieldByIndex(a.data.targetIndex)
+		rv = reflectValueFieldByIndex(a.rv, a.meta.targetIndex, !lazy)
 	)
 
 	switch rv.Kind() {
@@ -95,7 +61,7 @@ func (a Association) document(lazy bool) (*Document, bool) {
 // If association is zero, second return value will be false.
 func (a Association) Collection() (*Collection, bool) {
 	var (
-		rv     = a.rv.FieldByIndex(a.data.targetIndex)
+		rv     = reflectValueFieldByIndex(a.rv, a.meta.targetIndex, true)
 		loaded = !rv.IsNil()
 	)
 
@@ -118,7 +84,7 @@ func (a Association) Collection() (*Collection, bool) {
 // IsZero returns true if association is not loaded.
 func (a Association) IsZero() bool {
 	var (
-		rv = a.rv.FieldByIndex(a.data.targetIndex)
+		rv = reflectValueFieldByIndex(a.rv, a.meta.targetIndex, false)
 	)
 
 	return isDeepZero(reflect.Indirect(rv), 1)
@@ -126,17 +92,17 @@ func (a Association) IsZero() bool {
 
 // ReferenceField of the association.
 func (a Association) ReferenceField() string {
-	return a.data.referenceField
+	return a.meta.ReferenceField()
 }
 
 // ReferenceValue of the association.
 func (a Association) ReferenceValue() interface{} {
-	return indirectInterface(a.rv.Field(a.data.referenceIndex))
+	return indirectInterface(reflectValueFieldByIndex(a.rv, a.meta.referenceIndex, false))
 }
 
 // ForeignField of the association.
 func (a Association) ForeignField() string {
-	return a.data.foreignField
+	return a.meta.ForeignField()
 }
 
 // ForeignValue of the association.
@@ -147,122 +113,38 @@ func (a Association) ForeignValue() interface{} {
 	}
 
 	var (
-		rv = a.rv.FieldByIndex(a.data.targetIndex)
+		rv = reflectValueFieldByIndex(a.rv, a.meta.targetIndex, false)
 	)
 
 	if rv.Kind() == reflect.Ptr {
 		rv = rv.Elem()
 	}
 
-	return indirectInterface(rv.Field(a.data.foreignIndex))
+	return indirectInterface(reflectValueFieldByIndex(rv, a.meta.foreignIndex, false))
 }
 
 // Through return intermediary association.
 func (a Association) Through() string {
-	return a.data.through
+	return a.meta.Through()
 }
 
 // Autoload assoc setting when parent is loaded.
 func (a Association) Autoload() bool {
-	return a.data.autoload
+	return a.meta.Autoload()
 }
 
 // Autosave setting when parent is created/updated/deleted.
 func (a Association) Autosave() bool {
-	return a.data.autosave
+	return a.meta.Autosave()
 }
 
-func newAssociation(rv reflect.Value, index int) Association {
+func newAssociation(rv reflect.Value, index []int) Association {
 	if rv.Kind() == reflect.Ptr {
 		rv = rv.Elem()
 	}
 
 	return Association{
-		data: extractAssociationData(rv.Type(), index),
+		meta: getAssociationMeta(rv.Type(), index),
 		rv:   rv,
 	}
-}
-
-func extractAssociationData(rt reflect.Type, index int) associationData {
-	var (
-		key = associationKey{
-			rt:    rt,
-			index: index,
-		}
-	)
-
-	if val, cached := associationCache.Load(key); cached {
-		return val.(associationData)
-	}
-
-	var (
-		sf        = rt.Field(index)
-		ft        = sf.Type
-		ref       = sf.Tag.Get("ref")
-		fk        = sf.Tag.Get("fk")
-		fName     = fieldName(sf)
-		assocData = associationData{
-			targetIndex: sf.Index,
-			through:     sf.Tag.Get("through"),
-			autoload:    sf.Tag.Get("auto") == "true" || sf.Tag.Get("autoload") == "true",
-			autosave:    sf.Tag.Get("auto") == "true" || sf.Tag.Get("autosave") == "true",
-		}
-	)
-
-	if assocData.autosave && assocData.through != "" {
-		panic("rel: autosave is not supported for has one/has many through association")
-	}
-
-	for ft.Kind() == reflect.Ptr || ft.Kind() == reflect.Slice {
-		ft = ft.Elem()
-	}
-
-	var (
-		refDocData = extractDocumentData(rt, true)
-		fkDocData  = extractDocumentData(ft, true)
-	)
-
-	// Try to guess ref and fk if not defined.
-	if ref == "" || fk == "" {
-		// TODO: replace "id" with inferred primary field
-		if assocData.through != "" {
-			ref = "id"
-			fk = "id"
-		} else if _, isBelongsTo := refDocData.index[fName+"_id"]; isBelongsTo {
-			ref = fName + "_id"
-			fk = "id"
-		} else {
-			ref = "id"
-			fk = snaker.CamelToSnake(rt.Name()) + "_id"
-		}
-	}
-
-	if id, exist := refDocData.index[ref]; !exist {
-		panic("rel: references (" + ref + ") field not found ")
-	} else {
-		assocData.referenceIndex = id
-		assocData.referenceField = ref
-	}
-
-	if id, exist := fkDocData.index[fk]; !exist {
-		panic("rel: foreign_key (" + fk + ") field not found")
-	} else {
-		assocData.foreignIndex = id
-		assocData.foreignField = fk
-	}
-
-	// guess assoc type
-	if sf.Type.Kind() == reflect.Slice || (sf.Type.Kind() == reflect.Ptr && sf.Type.Elem().Kind() == reflect.Slice) {
-		assocData.typ = HasMany
-	} else {
-		if len(assocData.referenceField) > len(assocData.foreignField) {
-			assocData.typ = BelongsTo
-		} else {
-			assocData.typ = HasOne
-		}
-	}
-
-	associationCache.Store(key, assocData)
-
-	return assocData
 }
