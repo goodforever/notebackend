@@ -12,18 +12,23 @@ type Mutator interface {
 
 // Apply using given mutators.
 func Apply(doc *Document, mutators ...Mutator) Mutation {
+	return applyMutators(doc, true, true, mutators...)
+}
+
+// apply given mutators with customized default values
+func applyMutators(doc *Document, cascade, applyStructset bool, mutators ...Mutator) Mutation {
 	var (
 		optionsCount int
 		mutation     = Mutation{
 			Unscoped: false,
 			Reload:   false,
-			Cascade:  true,
+			Cascade:  Cascade(cascade),
 		}
 	)
 
 	for i := range mutators {
 		switch mut := mutators[i].(type) {
-		case Unscoped, Reload, Cascade:
+		case Unscoped, Reload, Cascade, OnConflict:
 			optionsCount++
 			mut.Apply(doc, &mutation)
 		default:
@@ -32,7 +37,7 @@ func Apply(doc *Document, mutators ...Mutator) Mutation {
 	}
 
 	// fallback to structset.
-	if optionsCount == len(mutators) {
+	if applyStructset && optionsCount == len(mutators) {
 		newStructset(doc, false).Apply(doc, &mutation)
 	}
 
@@ -48,12 +53,13 @@ type AssocMutation struct {
 // Mutation represents value to be inserted or updated to database.
 // It's not safe to be used multiple time. some operation my alter mutation data.
 type Mutation struct {
-	Mutates   map[string]Mutate
-	Assoc     map[string]AssocMutation
-	Unscoped  Unscoped
-	Reload    Reload
-	Cascade   Cascade
-	ErrorFunc ErrorFunc
+	Mutates    map[string]Mutate
+	Assoc      map[string]AssocMutation
+	OnConflict OnConflict
+	Unscoped   Unscoped
+	Reload     Reload
+	Cascade    Cascade
+	ErrorFunc  ErrorFunc
 }
 
 func (m *Mutation) initMutates() {
@@ -148,7 +154,6 @@ func (m Mutate) Apply(doc *Document, mutation *Mutation) {
 		} else {
 			invalid = true
 		}
-
 		mutation.Reload = true
 	}
 
