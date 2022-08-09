@@ -41,7 +41,7 @@ github.com/stretchr/testify/mock
 go.uber.org/atomic
 # go.uber.org/multierr v1.6.0
 go.uber.org/multierr
-# go.uber.org/zap v1.20.0
+# go.uber.org/zap v1.22.0
 ## explicit
 go.uber.org/zap
 go.uber.org/zap/buffer
@@ -51,5 +51,5 @@ go.uber.org/zap/internal/exit
 go.uber.org/zap/zapcore
 # golang.org/x/lint v0.0.0-20201208152925-83fdc39ff7b5
 ## explicit
-# gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b
+# gopkg.in/yaml.v3 v3.0.1
 gopkg.in/yaml.v3
