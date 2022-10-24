@@ -4,10 +4,11 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"strconv"
 	"strings"
 )
 
-func indirectInterface(rv reflect.Value) interface{} {
+func indirectInterface(rv reflect.Value) any {
 	if rv.Kind() == reflect.Ptr {
 		if rv.IsNil() {
 			return nil
@@ -38,7 +39,7 @@ type isZeroer interface {
 }
 
 // isZero shallowly check wether a field in struct is zero or not
-func isZero(value interface{}) bool {
+func isZero(value any) bool {
 	var (
 		zero bool
 	)
@@ -133,7 +134,35 @@ func isDeepZero(rv reflect.Value, depth int) bool {
 	}
 }
 
-func fmtiface(v interface{}) string {
+func setPointerValue(ft reflect.Type, fv reflect.Value, rt reflect.Type, rv reflect.Value) bool {
+	if ft.Elem() != rt && !rt.AssignableTo(ft.Elem()) {
+		return false
+	}
+
+	if fv.IsNil() {
+		fv.Set(reflect.New(ft.Elem()))
+	}
+	fv.Elem().Set(rv)
+
+	return true
+}
+
+func setConvertValue(ft reflect.Type, fv reflect.Value, rt reflect.Type, rv reflect.Value) bool {
+	var (
+		rk = rt.Kind()
+		fk = ft.Kind()
+	)
+
+	// prevents unintentional conversion
+	if (rk >= reflect.Int || rk <= reflect.Uint64) && fk == reflect.String {
+		return false
+	}
+
+	fv.Set(rv.Convert(ft))
+	return true
+}
+
+func fmtAny(v any) string {
 	if str, ok := v.(string); ok {
 		return "\"" + str + "\""
 	}
@@ -141,14 +170,53 @@ func fmtiface(v interface{}) string {
 	return fmt.Sprint(v)
 }
 
-func fmtifaces(v []interface{}) string {
+func fmtAnys(v []any) string {
 	var str strings.Builder
 	for i := range v {
 		if i > 0 {
 			str.WriteString(", ")
 		}
-		str.WriteString(fmtiface(v[i]))
+		str.WriteString(fmtAny(v[i]))
 	}
 
 	return str.String()
+}
+
+// Encode index slice into single string
+func encodeIndices(indices []int) string {
+	var sb strings.Builder
+	for _, index := range indices {
+		sb.WriteString("/")
+		sb.WriteString(strconv.Itoa(index))
+	}
+	return sb.String()
+}
+
+// Get field by index and init pointers on path if flag is true
+//
+//	modified from: https://cs.opensource.google/go/go/+/refs/tags/go1.17.7:src/reflect/value.go;l=1228-1245;bpv
+func reflectValueFieldByIndex(rv reflect.Value, index []int, init bool) reflect.Value {
+	if len(index) == 1 {
+		return rv.Field(index[0])
+	}
+
+	for depth := 0; depth < len(index)-1; depth += 1 {
+		field := rv.Field(index[depth])
+
+		if field.Kind() != reflect.Ptr {
+			rv = field
+			continue
+		}
+
+		if field.IsNil() {
+			if !init {
+				targetType := field.Type().Elem().FieldByIndex(index[depth+1:]).Type
+				return reflect.Zero(reflect.PtrTo(targetType))
+			}
+			field.Set(reflect.New(field.Type().Elem()))
+		}
+
+		rv = field.Elem()
+	}
+	return rv.Field(index[len(index)-1])
 }
