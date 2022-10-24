@@ -5,25 +5,30 @@ import (
 	"reflect"
 )
 
-// Mutator is interface for a record mutator.
+// Mutator is interface for a entity mutator.
 type Mutator interface {
 	Apply(doc *Document, mutation *Mutation)
 }
 
 // Apply using given mutators.
 func Apply(doc *Document, mutators ...Mutator) Mutation {
+	return applyMutators(doc, true, true, mutators...)
+}
+
+// apply given mutators with customized default values
+func applyMutators(doc *Document, cascade, applyStructset bool, mutators ...Mutator) Mutation {
 	var (
 		optionsCount int
 		mutation     = Mutation{
 			Unscoped: false,
 			Reload:   false,
-			Cascade:  true,
+			Cascade:  Cascade(cascade),
 		}
 	)
 
 	for i := range mutators {
 		switch mut := mutators[i].(type) {
-		case Unscoped, Reload, Cascade:
+		case Unscoped, Reload, Cascade, OnConflict:
 			optionsCount++
 			mut.Apply(doc, &mutation)
 		default:
@@ -32,7 +37,7 @@ func Apply(doc *Document, mutators ...Mutator) Mutation {
 	}
 
 	// fallback to structset.
-	if optionsCount == len(mutators) {
+	if applyStructset && optionsCount == len(mutators) {
 		newStructset(doc, false).Apply(doc, &mutation)
 	}
 
@@ -42,18 +47,19 @@ func Apply(doc *Document, mutators ...Mutator) Mutation {
 // AssocMutation represents mutation for association.
 type AssocMutation struct {
 	Mutations  []Mutation
-	DeletedIDs []interface{} // This is array of single id, and doesn't support composite primary key.
+	DeletedIDs []any // This is array of single id, and doesn't support composite primary key.
 }
 
 // Mutation represents value to be inserted or updated to database.
 // It's not safe to be used multiple time. some operation my alter mutation data.
 type Mutation struct {
-	Mutates   map[string]Mutate
-	Assoc     map[string]AssocMutation
-	Unscoped  Unscoped
-	Reload    Reload
-	Cascade   Cascade
-	ErrorFunc ErrorFunc
+	Mutates    map[string]Mutate
+	Assoc      map[string]AssocMutation
+	OnConflict OnConflict
+	Unscoped   Unscoped
+	Reload     Reload
+	Cascade    Cascade
+	ErrorFunc  ErrorFunc
 }
 
 func (m *Mutation) initMutates() {
@@ -101,7 +107,7 @@ func (m *Mutation) SetAssoc(field string, muts ...Mutation) {
 
 // SetDeletedIDs mutation.
 // nil slice will clear association.
-func (m *Mutation) SetDeletedIDs(field string, ids []interface{}) {
+func (m *Mutation) SetDeletedIDs(field string, ids []any) {
 	m.initAssoc()
 
 	assoc := m.Assoc[field]
@@ -127,7 +133,7 @@ const (
 type Mutate struct {
 	Type  ChangeOp
 	Field string
-	Value interface{}
+	Value any
 }
 
 // Apply mutation.
@@ -148,7 +154,6 @@ func (m Mutate) Apply(doc *Document, mutation *Mutation) {
 		} else {
 			invalid = true
 		}
-
 		mutation.Reload = true
 	}
 
@@ -164,18 +169,18 @@ func (m Mutate) String() string {
 	str := "≤Invalid Mutator>"
 	switch m.Type {
 	case ChangeSetOp:
-		str = fmt.Sprintf("rel.Set(\"%s\", %s)", m.Field, fmtiface(m.Value))
+		str = fmt.Sprintf("rel.Set(\"%s\", %s)", m.Field, fmtAny(m.Value))
 	case ChangeIncOp:
-		str = fmt.Sprintf("rel.IncBy(\"%s\", %s)", m.Field, fmtiface(m.Value))
+		str = fmt.Sprintf("rel.IncBy(\"%s\", %s)", m.Field, fmtAny(m.Value))
 	case ChangeFragmentOp:
-		str = fmt.Sprintf("rel.SetFragment(\"%s\", %s)", m.Field, fmtifaces(m.Value.([]interface{})))
+		str = fmt.Sprintf("rel.SetFragment(\"%s\", %s)", m.Field, fmtAnys(m.Value.([]any)))
 	}
 
 	return str
 }
 
 // Set create a mutate using set operation.
-func Set(field string, value interface{}) Mutate {
+func Set(field string, value any) Mutate {
 	return Mutate{
 		Type:  ChangeSetOp,
 		Field: field,
@@ -213,7 +218,7 @@ func DecBy(field string, n int) Mutate {
 
 // SetFragment create a mutate operation using fragment operation.
 // Only available for Update.
-func SetFragment(raw string, args ...interface{}) Mutate {
+func SetFragment(raw string, args ...any) Mutate {
 	return Mutate{
 		Type:  ChangeFragmentOp,
 		Field: raw,
