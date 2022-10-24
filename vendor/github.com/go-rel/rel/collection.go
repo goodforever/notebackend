@@ -10,14 +10,15 @@ type slice interface {
 	Add() *Document
 	Get(index int) *Document
 	Len() int
+	Meta() DocumentMeta
 }
 
 // Collection provides an abstraction over reflect to easily works with slice for database purpose.
 type Collection struct {
-	v       interface{}
+	v       any
 	rv      reflect.Value
 	rt      reflect.Type
-	data    documentData
+	meta    DocumentMeta
 	swapper func(i, j int)
 }
 
@@ -28,11 +29,7 @@ func (c Collection) ReflectValue() reflect.Value {
 
 // Table returns name of the table.
 func (c *Collection) Table() string {
-	if tn, ok := c.v.(table); ok {
-		return tn.Table()
-	}
-
-	return tableName(indirectReflectType(c.rt.Elem()))
+	return c.meta.Table()
 }
 
 // PrimaryFields column name of this collection.
@@ -41,11 +38,11 @@ func (c Collection) PrimaryFields() []string {
 		return p.PrimaryFields()
 	}
 
-	if len(c.data.primaryField) == 0 {
+	if len(c.meta.primaryField) == 0 {
 		panic("rel: failed to infer primary key for type " + c.rt.String())
 	}
 
-	return c.data.primaryField
+	return c.meta.primaryField
 }
 
 // PrimaryField column name of this document.
@@ -60,26 +57,26 @@ func (c Collection) PrimaryField() string {
 
 // PrimaryValues of collection.
 // Returned value will be interface of slice interface.
-func (c Collection) PrimaryValues() []interface{} {
+func (c Collection) PrimaryValues() []any {
 	if p, ok := c.v.(primary); ok {
 		return p.PrimaryValues()
 	}
 
 	var (
-		index   = c.data.primaryIndex
-		pValues = make([]interface{}, len(c.PrimaryFields()))
+		index   = c.meta.primaryIndex
+		pValues = make([]any, len(c.PrimaryFields()))
 	)
 
 	if index != nil {
 		for i := range index {
 			var (
 				idxLen = c.rv.Len()
-				values = make([]interface{}, 0, idxLen)
+				values = make([]any, 0, idxLen)
 			)
 
 			for j := 0; j < idxLen; j++ {
 				if item := c.rvIndex(j); item.IsValid() {
-					values = append(values, item.Field(index[i]).Interface())
+					values = append(values, reflectValueFieldByIndex(item, index[i], false).Interface())
 				}
 			}
 
@@ -88,7 +85,7 @@ func (c Collection) PrimaryValues() []interface{} {
 	} else {
 		// using interface.
 		var (
-			tmp = make([][]interface{}, len(pValues))
+			tmp = make([][]any, len(pValues))
 		)
 
 		for i := 0; i < c.rv.Len(); i++ {
@@ -111,7 +108,7 @@ func (c Collection) PrimaryValues() []interface{} {
 
 // PrimaryValue of this document.
 // panic if document uses composite key.
-func (c Collection) PrimaryValue() interface{} {
+func (c Collection) PrimaryValue() any {
 	if values := c.PrimaryValues(); len(values) == 1 {
 		return values[0]
 	}
@@ -131,6 +128,11 @@ func (c Collection) Get(index int) *Document {
 // Len of the underlying slice.
 func (c Collection) Len() int {
 	return c.rv.Len()
+}
+
+// Meta returns document meta.
+func (c Collection) Meta() DocumentMeta {
+	return c.meta
 }
 
 // Reset underlying slice to be zero length.
@@ -176,8 +178,8 @@ func (c Collection) Swap(i, j int) {
 
 // NewCollection used to create abstraction to work with slice.
 // COllection can be created using interface or reflect.Value.
-func NewCollection(records interface{}, readonly ...bool) *Collection {
-	switch v := records.(type) {
+func NewCollection(entities any, readonly ...bool) *Collection {
+	switch v := entities.(type) {
 	case *Collection:
 		return v
 	case reflect.Value:
@@ -191,7 +193,7 @@ func NewCollection(records interface{}, readonly ...bool) *Collection {
 	}
 }
 
-func newCollection(v interface{}, rv reflect.Value, readonly bool) *Collection {
+func newCollection(v any, rv reflect.Value, readonly bool) *Collection {
 	var (
 		rt = rv.Type()
 	)
@@ -213,6 +215,6 @@ func newCollection(v interface{}, rv reflect.Value, readonly bool) *Collection {
 		v:    v,
 		rv:   rv,
 		rt:   rt,
-		data: extractDocumentData(indirectReflectType(rt.Elem()), false),
+		meta: getDocumentMeta(indirectReflectType(rt.Elem()), false),
 	}
 }
